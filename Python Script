@@ -3,7 +3,7 @@ import discord
 from discord.ext import commands
 from collections import defaultdict
 
-TOKEN = "MTE1ODM2Mjc5OTQyOTM5ODUzOA.G6RSXu.16I5GpQ-lM_CQzuuzcNxg-RaIEx9qX1gRw8sgk"  # Selfbot token
+TOKEN = "MTM4OTUyNTE2MDM1NjQ3OTA0MA.GfU5sC.vPAyHMyeencHU2Fl6jKvGF__qpCOLU-syQ3v-M"  # Selfbot token
 TARGET_CHANNEL_ID = 1389766354839797891  # Channel to monitor for messages and reactions
 CONTROL_CHANNEL_ID = 1389276304544764054  # Channel to send P commands
 
