@@ -1,17 +1,17 @@
-import asyncio
 import discord
 from discord.ext import commands
+import asyncio
 from collections import defaultdict
 
-TOKEN = "MTM4OTUyNTE2MDM1NjQ3OTA0MA.GfU5sC.vPAyHMyeencHU2Fl6jKvGF__qpCOLU-syQ3v-M"  # Selfbot token
-TARGET_CHANNEL_ID = 1389766354839797891  # Channel to monitor for messages and reactions
-CONTROL_CHANNEL_ID = 1389276304544764054  # Channel to send P commands
+TOKEN = "YOUR_ACCOUNT_TOKEN"
+TARGET_CHANNEL_ID = 123456789012345678  # <-- change to your target channel ID
+CONTROL_CHANNEL_ID = 987654321098765432  # <-- change to your control channel ID
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", self_bot=True, intents=intents)
 
-# Track messages and reactions
-message_reaction_data = defaultdict(dict)  # message_id -> {user_id: emoji}
+# Tracks reactions: {message_id: {user_id: emoji}}
+message_reactions = defaultdict(dict)
 
 @bot.event
 async def on_ready():
@@ -22,72 +22,79 @@ async def on_reaction_add(reaction, user):
     if user.id == bot.user.id:
         return
 
-    message = reaction.message
-
-    if message.channel.id == TARGET_CHANNEL_ID:
-        message_reaction_data[message.id][user.id] = str(reaction.emoji)
+    msg = reaction.message
+    if msg.channel.id == TARGET_CHANNEL_ID:
+        message_reactions[msg.id][user.id] = str(reaction.emoji)
 
 @bot.command()
 async def check(ctx, message_id: int):
-    """Manually trigger check on a message"""
+    """Trigger manually from control channel."""
     if ctx.channel.id != CONTROL_CHANNEL_ID:
         return
 
     try:
-        channel = bot.get_channel(TARGET_CHANNEL_ID)
-        message = await channel.fetch_message(message_id)
-        users = await message.reactions[0].users().flatten()
+        target_channel = bot.get_channel(TARGET_CHANNEL_ID)
+        message = await target_channel.fetch_message(message_id)
+
+        users_handled = set()
 
         for reaction in message.reactions:
             async for user in reaction.users():
                 if user.id == bot.user.id:
                     continue
 
-                # Write P command in control channel
-                await ctx.send(f"#P {user.id}")
-                await asyncio.sleep(0.5)
-                control_msg = await ctx.history(limit=1).flatten()
-                if control_msg:
-                    await control_msg[0].add_reaction("❌")
-
-                await asyncio.sleep(0.5)
-
-                # Now write P again for each other user they reacted to
-                if message.author.id != user.id:
-                    await ctx.send(f"#P {message.author.id}")
+                if user.id not in users_handled:
+                    sent = await ctx.send(f"#P {user.id}")
+                    await sent.add_reaction("❌")
+                    users_handled.add(user.id)
                     await asyncio.sleep(0.5)
-                    control_msg = await ctx.history(limit=1).flatten()
-                    if control_msg:
-                        await control_msg[0].add_reaction("❌")
+
+                # Also send P for the author if different
+                if message.author.id != user.id and message.author.id not in users_handled:
+                    sent = await ctx.send(f"#P {message.author.id}")
+                    await sent.add_reaction("❌")
+                    users_handled.add(message.author.id)
+                    await asyncio.sleep(0.5)
+
+        # Store for reaction removal later
+        message_reactions[message.id] = {
+            user.id: str(reaction.emoji)
+            async for reaction in message.reactions
+            for user in await reaction.users().flatten()
+            if user.id != bot.user.id
+        }
 
     except Exception as e:
-        print("Error checking reactions:", e)
+        await ctx.send(f"Error: {e}")
 
 @bot.event
-async def on_reaction_add(reaction, user):
-    # Ignore own ❌ reactions
-    if user.id != bot.user.id:
+async def on_raw_reaction_add(payload):
+    """Handle ❌ reaction to #P commands in control channel."""
+    if payload.user_id != bot.user.id:
+        return
+    if str(payload.emoji.name) != "❌":
         return
 
-    if str(reaction.emoji) != "❌":
+    channel = bot.get_channel(payload.channel_id)
+    if channel.id != CONTROL_CHANNEL_ID:
         return
 
     try:
-        content = reaction.message.content.strip()
-        if content.startswith("#P "):
-            user_id = int(content.split()[1])
-            control_channel = bot.get_channel(CONTROL_CHANNEL_ID)
+        msg = await channel.fetch_message(payload.message_id)
+        if not msg.content.startswith("#P "):
+            return
 
-            # Search all tracked messages for that user's reaction and remove it
-            for message_id, reactions in message_reaction_data.items():
-                if user_id in reactions:
-                    channel = bot.get_channel(TARGET_CHANNEL_ID)
-                    msg = await channel.fetch_message(message_id)
-                    await msg.remove_reaction(reactions[user_id], discord.Object(id=user_id))
-                    print(f"Removed {reactions[user_id]} from user {user_id}")
-                    del reactions[user_id]
+        user_id = int(msg.content.split()[1])
+
+        for message_id, reacts in message_reactions.items():
+            if user_id in reacts:
+                emoji = reacts[user_id]
+                target_channel = bot.get_channel(TARGET_CHANNEL_ID)
+                target_msg = await target_channel.fetch_message(message_id)
+                await target_msg.remove_reaction(emoji, discord.Object(id=user_id))
+                print(f"Removed {emoji} from user {user_id} on message {message_id}")
+                del reacts[user_id]
+                break
 
     except Exception as e:
-        print("Failed to remove reaction:", e)
-
-bot.run(TOKEN)
+        print(f"Failed to remove reaction: {e}")
