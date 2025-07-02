@@ -1,0 +1,93 @@
+import asyncio
+import discord
+from discord.ext import commands
+from collections import defaultdict
+
+TOKEN = "MTE1ODM2Mjc5OTQyOTM5ODUzOA.G6RSXu.16I5GpQ-lM_CQzuuzcNxg-RaIEx9qX1gRw8sgk"  # Selfbot token
+TARGET_CHANNEL_ID = 1389766354839797891  # Channel to monitor for messages and reactions
+CONTROL_CHANNEL_ID = 1389276304544764054  # Channel to send P commands
+
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix="!", self_bot=True, intents=intents)
+
+# Track messages and reactions
+message_reaction_data = defaultdict(dict)  # message_id -> {user_id: emoji}
+
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user}")
+
+@bot.event
+async def on_reaction_add(reaction, user):
+    if user.id == bot.user.id:
+        return
+
+    message = reaction.message
+
+    if message.channel.id == TARGET_CHANNEL_ID:
+        message_reaction_data[message.id][user.id] = str(reaction.emoji)
+
+@bot.command()
+async def check(ctx, message_id: int):
+    """Manually trigger check on a message"""
+    if ctx.channel.id != CONTROL_CHANNEL_ID:
+        return
+
+    try:
+        channel = bot.get_channel(TARGET_CHANNEL_ID)
+        message = await channel.fetch_message(message_id)
+        users = await message.reactions[0].users().flatten()
+
+        for reaction in message.reactions:
+            async for user in reaction.users():
+                if user.id == bot.user.id:
+                    continue
+
+                # Write P command in control channel
+                await ctx.send(f"#P {user.id}")
+                await asyncio.sleep(0.5)
+                control_msg = await ctx.history(limit=1).flatten()
+                if control_msg:
+                    await control_msg[0].add_reaction("❌")
+
+                await asyncio.sleep(0.5)
+
+                # Now write P again for each other user they reacted to
+                if message.author.id != user.id:
+                    await ctx.send(f"#P {message.author.id}")
+                    await asyncio.sleep(0.5)
+                    control_msg = await ctx.history(limit=1).flatten()
+                    if control_msg:
+                        await control_msg[0].add_reaction("❌")
+
+    except Exception as e:
+        print("Error checking reactions:", e)
+
+@bot.event
+async def on_reaction_add(reaction, user):
+    # Ignore own ❌ reactions
+    if user.id != bot.user.id:
+        return
+
+    if str(reaction.emoji) != "❌":
+        return
+
+    try:
+        content = reaction.message.content.strip()
+        if content.startswith("#P "):
+            user_id = int(content.split()[1])
+            control_channel = bot.get_channel(CONTROL_CHANNEL_ID)
+
+            # Search all tracked messages for that user's reaction and remove it
+            for message_id, reactions in message_reaction_data.items():
+                if user_id in reactions:
+                    channel = bot.get_channel(TARGET_CHANNEL_ID)
+                    msg = await channel.fetch_message(message_id)
+                    await msg.remove_reaction(reactions[user_id], discord.Object(id=user_id))
+                    print(f"Removed {reactions[user_id]} from user {user_id}")
+                    del reactions[user_id]
+
+    except Exception as e:
+        print("Failed to remove reaction:", e)
+
+bot.run(TOKEN)
